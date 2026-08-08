@@ -23,7 +23,7 @@ import static net.kyori.adventure.text.format.NamedTextColor.YELLOW;
 @ApiStatus.NonExtendable
 public abstract class LogManager {
 
-    protected static final String LOGGER_NAME = "[NEKO!]";
+    protected static final String LOGGER_NAME = "packetevents";
     private static final char LEGACY_COLOR_CHAR = '§';
 
     protected final PacketEventsAPI<?> packetevents;
