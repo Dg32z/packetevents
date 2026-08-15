@@ -18,10 +18,12 @@
 
 package com.github.retrooper.packetevents.protocol.component.builtin.item;
 
-import com.github.retrooper.packetevents.PacketEvents;
+import com.github.retrooper.packetevents.protocol.nbt.NBT;
+import com.github.retrooper.packetevents.util.adventure.AdventureSerializer;
 import com.github.retrooper.packetevents.wrapper.PacketWrapper;
 import net.kyori.adventure.text.Component;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
@@ -31,29 +33,68 @@ public class ItemLore {
     public static final ItemLore EMPTY = new ItemLore(Collections.emptyList());
 
     private List<Component> lines;
+    private List<NBT> rawLines;
+    private AdventureSerializer serializer;
+    private boolean converted;
 
     public ItemLore(List<Component> lines) {
         this.lines = lines;
+        this.converted = true;
     }
+
+    private ItemLore() {
+    }
+
     public static ItemLore read(PacketWrapper<?> wrapper) {
-        List<Component> lines = wrapper.readList(PacketWrapper::readComponent);
-        return new ItemLore(lines);
+        ItemLore lore = new ItemLore();
+        lore.rawLines = wrapper.readList(PacketWrapper::readNBTRaw);
+        lore.serializer = wrapper.getSerializers();
+        return lore;
     }
 
     public static void write(PacketWrapper<?> wrapper, ItemLore lore) {
-        wrapper.writeList(lore.lines, PacketWrapper::writeComponent);
+        if (lore.converted) {
+            wrapper.writeList(lore.lines, PacketWrapper::writeComponent);
+        } else {
+            wrapper.writeList(lore.rawLines, PacketWrapper::writeNBTRaw);
+        }
+    }
+
+    private void ensureConverted() {
+        if (converted) {
+            return;
+        }
+        synchronized (this) {
+            if (converted) {
+                return;
+            }
+            List<Component> convertedLines = new ArrayList<>(rawLines.size());
+            AdventureSerializer s = serializer;
+            for (NBT nbt : rawLines) {
+                convertedLines.add(s.fromNbtTag(nbt));
+            }
+            this.lines = convertedLines;
+            this.rawLines = null;
+            this.serializer = null;
+            this.converted = true;
+        }
     }
 
     public void addLine(Component line) {
+        ensureConverted();
         this.lines.add(line);
     }
 
     public List<Component> getLines() {
+        ensureConverted();
         return this.lines;
     }
 
     public void setLines(List<Component> lines) {
         this.lines = lines;
+        this.rawLines = null;
+        this.serializer = null;
+        this.converted = true;
     }
 
     @Override
@@ -61,16 +102,16 @@ public class ItemLore {
         if (this == obj) return true;
         if (!(obj instanceof ItemLore)) return false;
         ItemLore itemLore = (ItemLore) obj;
-        return this.lines.equals(itemLore.lines);
+        return getLines().equals(itemLore.getLines());
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(this.lines);
+        return Objects.hash(getLines());
     }
 
     @Override
     public String toString() {
-        return "ItemLore{lines=" + this.lines + '}';
+        return "ItemLore{lines=" + getLines() + '}';
     }
 }

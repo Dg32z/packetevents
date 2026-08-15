@@ -21,6 +21,7 @@ package com.github.retrooper.packetevents.protocol.component;
 import com.github.retrooper.packetevents.netty.buffer.ByteBufHelper;
 import com.github.retrooper.packetevents.protocol.item.ItemStack;
 import com.github.retrooper.packetevents.protocol.item.type.ItemType;
+import com.github.retrooper.packetevents.protocol.player.ClientVersion;
 import com.github.retrooper.packetevents.util.mappings.GlobalRegistryHolder;
 import com.github.retrooper.packetevents.util.mappings.IRegistryHolder;
 import com.github.retrooper.packetevents.wrapper.PacketWrapper;
@@ -165,10 +166,12 @@ public class PatchableComponentMap implements IComponentMap {
         wrapper.writeVarInt(presentCount);
         wrapper.writeVarInt(absentCount);
 
+        ClientVersion clientVersion = wrapper.getServerVersion().toClientVersion();
+
         // write present patches
         for (Map.Entry<ComponentType<?>, Optional<?>> patch : allPatches.entrySet()) {
             if (patch.getValue().isPresent()) {
-                wrapper.writeVarInt(patch.getKey().getId(wrapper.getServerVersion().toClientVersion()));
+                wrapper.writeVarInt(patch.getKey().getId(clientVersion));
                 if (lengthPrefixed) {
                     // easiest solution is to just temporarily replace the buffer
                     Object originalBuffer = wrapper.buffer;
@@ -191,7 +194,7 @@ public class PatchableComponentMap implements IComponentMap {
         // write absent patches
         for (Map.Entry<ComponentType<?>, Optional<?>> patch : allPatches.entrySet()) {
             if (!patch.getValue().isPresent()) {
-                wrapper.writeVarInt(patch.getKey().getId(wrapper.getServerVersion().toClientVersion()));
+                wrapper.writeVarInt(patch.getKey().getId(clientVersion));
             }
         }
     }
