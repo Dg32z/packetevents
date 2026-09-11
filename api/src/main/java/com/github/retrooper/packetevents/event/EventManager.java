@@ -91,19 +91,23 @@ public class EventManager {
         }
 
         for (PacketListenerCommon listener : listeners) {
-            try {
-                if (listener.isPreVia() == preVia)
+            final boolean called = listener.isPreVia() == preVia;
+            if (called) {
+                try {
                     event.call(listener);
-            } catch (Exception t) {
-                // ignore handshake exceptions
-                if (t.getClass() != InvalidHandshakeException.class && (t.getCause() == null || t.getCause().getClass() != InvalidHandshakeException.class)) {
-                    PacketEvents.getAPI().getLogManager().warn("PacketEvents caught an unhandled exception while calling your listener.", t);
+                } catch (Exception t) {
+                    // ignore handshake exceptions
+                    if (t.getClass() != InvalidHandshakeException.class && (t.getCause() == null || t.getCause().getClass() != InvalidHandshakeException.class)) {
+                        PacketEvents.getAPI().getLogManager().warn("PacketEvents caught an unhandled exception while calling your listener.", t);
+                    }
                 }
             }
             if (postCallListenerAction != null) {
                 postCallListenerAction.run();
             }
-            if (protocolBuffer != null && initialReaderIndex != -1) {
+            // Only a listener that was actually called can have moved the reader index, and the
+            // reset used to run once per listener on the hot path of every packet.
+            if (called && protocolBuffer != null && initialReaderIndex != -1) {
                 ByteBufHelper.readerIndex(protocolBuffer, initialReaderIndex);
             }
         }
