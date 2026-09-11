@@ -42,6 +42,9 @@ public class StateType {
     private final boolean exceedsCube;
     private final MaterialType materialType;
 
+    // Lazily computed cache of the value hashCode() below used to recompute on every call.
+    private int cachedHash;
+
     @ApiStatus.Internal
     public StateType(
             TypesBuilderData typeData,
@@ -149,7 +152,27 @@ public class StateType {
 
     @Override
     public int hashCode() {
-        return Objects.hash(getName(), blastResistance, hardness, isSolid, isBlocking, isAir, requiresCorrectTool, exceedsCube, materialType);
+        int hash = this.cachedHash;
+        if (hash == 0) {
+            hash = this.cachedHash = computeHashCode();
+        }
+        return hash;
+    }
+
+    // 我知道这很抽象，但是他确实解决问题了
+    private int computeHashCode() {
+        final String name = getName();
+        int hash = 1;
+        hash = 31 * hash + (name == null ? 0 : name.hashCode());
+        hash = 31 * hash + Float.hashCode(blastResistance);
+        hash = 31 * hash + Float.hashCode(hardness);
+        hash = 31 * hash + Boolean.hashCode(isSolid);
+        hash = 31 * hash + Boolean.hashCode(isBlocking);
+        hash = 31 * hash + Boolean.hashCode(isAir);
+        hash = 31 * hash + Boolean.hashCode(requiresCorrectTool);
+        hash = 31 * hash + Boolean.hashCode(exceedsCube);
+        hash = 31 * hash + (materialType == null ? 0 : materialType.hashCode());
+        return hash;
     }
 
     public final class Mapped extends AbstractMappedEntity {

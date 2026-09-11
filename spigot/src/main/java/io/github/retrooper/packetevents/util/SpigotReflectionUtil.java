@@ -58,6 +58,8 @@ import java.io.DataInputStream;
 import java.io.DataOutput;
 import java.io.DataOutputStream;
 import java.io.IOException;
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
@@ -140,6 +142,23 @@ public final class SpigotReflectionUtil {
     //Constructors
     private static Constructor<?> NMS_ITEM_STACK_CONSTRUCTOR, NMS_PACKET_DATA_SERIALIZER_CONSTRUCTOR,
             NMS_MINECRAFT_KEY_CONSTRUCTOR, REGISTRY_FRIENDLY_BYTE_BUF_CONSTRUCTOR, BLOCK_POSITION_CONSTRUCTOR;
+
+    private static final com.github.retrooper.packetevents.util.ConversionCache<com.github.retrooper.packetevents.protocol.item.ItemStack> ITEM_STACK_DECODE_CACHE =
+            new com.github.retrooper.packetevents.util.ConversionCache<>(com.github.retrooper.packetevents.protocol.item.ItemStack::copy);
+    //Method handles for the hot ItemStack conversion path (faster than reflective invoke)
+    private static MethodHandle CRAFT_ITEM_STACK_AS_NMS_COPY_MH;
+    private static MethodHandle CRAFT_ITEM_STACK_AS_BUKKIT_COPY_MH;
+    private static MethodHandle REGISTRY_FRIENDLY_BYTE_BUF_CONSTRUCTOR_MH;
+    private static MethodHandle NMS_PACKET_DATA_SERIALIZER_CONSTRUCTOR_MH;
+    private static MethodHandle WRITE_ITEM_STACK_METHOD_MH;
+    private static MethodHandle STREAM_ENCODER_ENCODE_MH;
+    private static MethodHandle READ_ITEM_STACK_METHOD_MH;
+    private static MethodHandle STREAM_DECODER_DECODE_MH;
+    //Caches Bukkit -> PacketEvents ItemStack conversions keyed by the NMS handle identity.
+    //Entries are validated by count and the component patch reference, hits return a copy.
+    private static Field CRAFT_ITEM_STACK_HANDLE_FIELD;
+    private static Method ITEM_STACK_GET_PATCH_METHOD;
+    private static boolean ITEM_STACK_DECODE_CACHE_ENABLED;
 
     private static Object MINECRAFT_SERVER_INSTANCE;
     private static Object MINECRAFT_SERVER_CONNECTION_INSTANCE;
@@ -482,6 +501,64 @@ public final class SpigotReflectionUtil {
         initMethods();
         initConstructors();
         initObjects();
+        initMethodHandles();
+        initItemStackDecodeCache();
+    }
+
+    private static MethodHandle unreflect(Method method) {
+        if (method == null) {
+            return null;
+        }
+        try {
+            return MethodHandles.lookup().unreflect(method);
+        } catch (ReflectiveOperationException ignored) {
+            return null;
+        }
+    }
+
+    private static MethodHandle unreflectConstructor(Constructor<?> constructor) {
+        if (constructor == null) {
+            return null;
+        }
+        try {
+            return MethodHandles.lookup().unreflectConstructor(constructor);
+        } catch (ReflectiveOperationException ignored) {
+            return null;
+        }
+    }
+
+    private static void initMethodHandles() {
+        CRAFT_ITEM_STACK_AS_NMS_COPY_MH = unreflect(CRAFT_ITEM_STACK_AS_NMS_COPY);
+        CRAFT_ITEM_STACK_AS_BUKKIT_COPY_MH = unreflect(CRAFT_ITEM_STACK_AS_BUKKIT_COPY);
+        REGISTRY_FRIENDLY_BYTE_BUF_CONSTRUCTOR_MH = unreflectConstructor(REGISTRY_FRIENDLY_BYTE_BUF_CONSTRUCTOR);
+        NMS_PACKET_DATA_SERIALIZER_CONSTRUCTOR_MH = unreflectConstructor(NMS_PACKET_DATA_SERIALIZER_CONSTRUCTOR);
+        WRITE_ITEM_STACK_METHOD_MH = unreflect(WRITE_ITEM_STACK_IN_PACKET_DATA_SERIALIZER_METHOD);
+        STREAM_ENCODER_ENCODE_MH = unreflect(STREAM_ENCODER_ENCODE);
+        READ_ITEM_STACK_METHOD_MH = unreflect(READ_ITEM_STACK_IN_PACKET_DATA_SERIALIZER_METHOD);
+        STREAM_DECODER_DECODE_MH = unreflect(STREAM_DECODER_DECODE);
+    }
+
+    private static void initItemStackDecodeCache() {
+        try {
+            CRAFT_ITEM_STACK_HANDLE_FIELD = Reflection.getField(CRAFT_ITEM_STACK_CLASS, NMS_ITEM_STACK_CLASS, 0, true);
+        } catch (Throwable ignored) {
+            CRAFT_ITEM_STACK_HANDLE_FIELD = null;
+        }
+        if (CRAFT_ITEM_STACK_HANDLE_FIELD != null) {
+            if (VERSION.isNewerThanOrEquals(ServerVersion.V_1_20_5)) {
+                // find getComponentsPatch() by its return type, works with both mappings and obfuscated names
+                Class<?> patchClass = Reflection.getClassByNameWithoutException("net.minecraft.core.component.DataComponentPatch");
+                if (patchClass != null) {
+                    ITEM_STACK_GET_PATCH_METHOD = Reflection.getMethod(NMS_ITEM_STACK_CLASS, patchClass, 0);
+                }
+            } else {
+                ITEM_STACK_GET_PATCH_METHOD = Reflection.getMethod(NMS_ITEM_STACK_CLASS, "getTag", 0);
+            }
+            if (ITEM_STACK_GET_PATCH_METHOD != null) {
+                ITEM_STACK_GET_PATCH_METHOD.setAccessible(true);
+            }
+        }
+        ITEM_STACK_DECODE_CACHE_ENABLED = CRAFT_ITEM_STACK_HANDLE_FIELD != null && ITEM_STACK_GET_PATCH_METHOD != null;
     }
 
     @Nullable
@@ -624,8 +701,7 @@ public final class SpigotReflectionUtil {
 
     public static List<TextureProperty> getUserProfile(Player player) {
         if (PROPERTY_MAP_CLASS == null) {
-            PROPERTY_MAP_CLASS = Reflection.getClassByNameWithoutException("" +
-                    "com.mojang.authlib.properties.PropertyMap");
+            PROPERTY_MAP_CLASS = Reflection.getClassByNameWithoutException("com.mojang.authlib.properties.PropertyMap");
             PROPERTY_MAP_GET_METHOD = Reflection.getMethodExact(PROPERTY_MAP_CLASS, "get", Collection.class, Object.class);
         }
 
@@ -784,7 +860,7 @@ public final class SpigotReflectionUtil {
     public static int getDimensionId(Object worldServer) {
         try {
             Object dimensionType = GET_DIMENSION_MANAGER.invoke(worldServer);
-            if (false && GET_DIMENSION_ID != null) { // TODO: check with older version
+            if (false) { // TODO: check with older version
                 return (int) GET_DIMENSION_ID.invoke(dimensionType);
             }
             Object dimensionTypeRegistry;
@@ -898,6 +974,22 @@ public final class SpigotReflectionUtil {
     }
 
     public static com.github.retrooper.packetevents.protocol.item.ItemStack decodeBukkitItemStack(ItemStack in) {
+        if (ITEM_STACK_DECODE_CACHE_ENABLED && CRAFT_ITEM_STACK_CLASS.isInstance(in)) {
+            try {
+                Object handle = CRAFT_ITEM_STACK_HANDLE_FIELD.get(in);
+                if (handle != null) {
+                    Object patch = ITEM_STACK_GET_PATCH_METHOD.invoke(handle);
+                    return ITEM_STACK_DECODE_CACHE.getOrConvert(handle, in.getAmount(), patch,
+                            () -> decodeBukkitItemStackSlow(in));
+                }
+            } catch (Throwable ignored) {
+                // fall back to the slow path
+            }
+        }
+        return decodeBukkitItemStackSlow(in);
+    }
+
+    private static com.github.retrooper.packetevents.protocol.item.ItemStack decodeBukkitItemStackSlow(ItemStack in) {
         Object buffer = PooledByteBufAllocator.DEFAULT.buffer();
         try {
             // 3 reflection calls
@@ -1018,10 +1110,16 @@ public final class SpigotReflectionUtil {
     public static Object createPacketDataSerializer(Object byteBuf) {
         try {
             if (REGISTRY_FRIENDLY_BYTE_BUF_CONSTRUCTOR != null) {
+                if (REGISTRY_FRIENDLY_BYTE_BUF_CONSTRUCTOR_MH != null) {
+                    return REGISTRY_FRIENDLY_BYTE_BUF_CONSTRUCTOR_MH.invoke(byteBuf, getFrozenRegistryAccess());
+                }
                 return REGISTRY_FRIENDLY_BYTE_BUF_CONSTRUCTOR.newInstance(byteBuf, getFrozenRegistryAccess());
             }
+            if (NMS_PACKET_DATA_SERIALIZER_CONSTRUCTOR_MH != null) {
+                return NMS_PACKET_DATA_SERIALIZER_CONSTRUCTOR_MH.invoke(byteBuf);
+            }
             return NMS_PACKET_DATA_SERIALIZER_CONSTRUCTOR.newInstance(byteBuf);
-        } catch (InstantiationException | IllegalAccessException | InvocationTargetException e) {
+        } catch (Throwable e) {
             e.printStackTrace();
         }
         return null;
@@ -1058,6 +1156,14 @@ public final class SpigotReflectionUtil {
     }
 
     public static ItemStack toBukkitItemStack(Object nmsItemStack) {
+        if (CRAFT_ITEM_STACK_AS_BUKKIT_COPY_MH != null) {
+            try {
+                return (ItemStack) CRAFT_ITEM_STACK_AS_BUKKIT_COPY_MH.invoke(nmsItemStack);
+            } catch (Throwable e) {
+                e.printStackTrace();
+                return null;
+            }
+        }
         try {
             return (ItemStack) CRAFT_ITEM_STACK_AS_BUKKIT_COPY.invoke(null, nmsItemStack);
         } catch (IllegalAccessException | InvocationTargetException e) {
@@ -1067,6 +1173,14 @@ public final class SpigotReflectionUtil {
     }
 
     public static Object toNMSItemStack(ItemStack itemStack) {
+        if (CRAFT_ITEM_STACK_AS_NMS_COPY_MH != null) {
+            try {
+                return CRAFT_ITEM_STACK_AS_NMS_COPY_MH.invoke(itemStack);
+            } catch (Throwable e) {
+                e.printStackTrace();
+                return null;
+            }
+        }
         try {
             return CRAFT_ITEM_STACK_AS_NMS_COPY.invoke(null, itemStack);
         } catch (IllegalAccessException | InvocationTargetException e) {
@@ -1077,6 +1191,22 @@ public final class SpigotReflectionUtil {
 
 
     public static Object readNMSItemStackPacketDataSerializer(Object packetDataSerializer) {
+        if (READ_ITEM_STACK_METHOD_MH != null) {
+            try {
+                return READ_ITEM_STACK_METHOD_MH.invoke(packetDataSerializer);
+            } catch (Throwable e) {
+                e.printStackTrace();
+                return null;
+            }
+        }
+        if (STREAM_DECODER_DECODE_MH != null) {
+            try {
+                return STREAM_DECODER_DECODE_MH.invoke(ITEM_STACK_OPTIONAL_STREAM_CODEC, packetDataSerializer);
+            } catch (Throwable e) {
+                e.printStackTrace();
+                return null;
+            }
+        }
         try {
             if (READ_ITEM_STACK_IN_PACKET_DATA_SERIALIZER_METHOD != null) {
                 return READ_ITEM_STACK_IN_PACKET_DATA_SERIALIZER_METHOD.invoke(packetDataSerializer);
@@ -1089,6 +1219,22 @@ public final class SpigotReflectionUtil {
     }
 
     public static Object writeNMSItemStackPacketDataSerializer(Object packetDataSerializer, Object nmsItemStack) {
+        if (WRITE_ITEM_STACK_METHOD_MH != null) {
+            try {
+                return WRITE_ITEM_STACK_METHOD_MH.invoke(packetDataSerializer, nmsItemStack);
+            } catch (Throwable e) {
+                e.printStackTrace();
+                return null;
+            }
+        }
+        if (STREAM_ENCODER_ENCODE_MH != null) {
+            try {
+                return STREAM_ENCODER_ENCODE_MH.invoke(ITEM_STACK_OPTIONAL_STREAM_CODEC, packetDataSerializer, nmsItemStack);
+            } catch (Throwable e) {
+                e.printStackTrace();
+                return null;
+            }
+        }
         try {
             if (WRITE_ITEM_STACK_IN_PACKET_DATA_SERIALIZER_METHOD != null) {
                 return WRITE_ITEM_STACK_IN_PACKET_DATA_SERIALIZER_METHOD.invoke(packetDataSerializer, nmsItemStack);

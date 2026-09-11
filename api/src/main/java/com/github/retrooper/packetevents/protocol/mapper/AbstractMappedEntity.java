@@ -24,12 +24,13 @@ import com.github.retrooper.packetevents.util.mappings.TypesBuilderData;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 
-import java.util.Objects;
-
 @NullMarked
 public abstract class AbstractMappedEntity implements MappedEntity {
 
     protected final @Nullable TypesBuilderData data;
+
+    // Lazily computed cache for the data-backed branch of hashCode() below.
+    private int cachedHash;
 
     protected AbstractMappedEntity(@Nullable TypesBuilderData data) {
         this.data = data;
@@ -77,11 +78,22 @@ public abstract class AbstractMappedEntity implements MappedEntity {
     @Override
     public int hashCode() {
         if (this.data != null) {
-            return Objects.hash(this.getClass(), this.data.getName());
+            int hash = this.cachedHash;
+            if (hash == 0) {
+                hash = this.cachedHash = computeHashCode();
+            }
+            return hash;
         } else if (this instanceof DeepComparableEntity) {
             return ((DeepComparableEntity) this).deepHashCode();
         }
         return System.identityHashCode(this);
+    }
+
+
+    private int computeHashCode() {
+        final ResourceLocation name = this.data.getName();
+        final int hash = 31 * (31 + this.getClass().hashCode());
+        return 31 * hash + name.hashCode();
     }
 
     @Override
