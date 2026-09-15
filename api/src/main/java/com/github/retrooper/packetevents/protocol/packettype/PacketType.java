@@ -216,8 +216,8 @@ import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerCh
 import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerChatPreview;
 import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerChunkBatchBegin;
 import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerChunkBatchEnd;
-import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerChunkData;
 import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerChunkBiomes;
+import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerChunkData;
 import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerChunkDataBulk;
 import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerClearDialog;
 import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerClearTitles;
@@ -1205,7 +1205,8 @@ public final class PacketType {
             ;
 
             private static int INDEX = 0;
-            private static final Map<Byte, Map<Integer, PacketTypeCommon>> PACKET_TYPE_ID_MAP = new HashMap<>();
+
+            private static volatile PacketTypeCommon[][] PACKET_TYPE_ID_ARRAY = new PacketTypeCommon[0][];
             private final int[] ids;
             private final Class<? extends PacketWrapper<?>> wrapper;
 
@@ -1224,21 +1225,31 @@ public final class PacketType {
             public static PacketTypeCommon getById(ClientVersion version, int packetId) {
                 PacketType.prepare();
 
-                int index = SERVERBOUND_PLAY_VERSION_MAPPER.getIndex(version);
-                Map<Integer, PacketTypeCommon> packetIdMap = PACKET_TYPE_ID_MAP.computeIfAbsent((byte) index, k -> new HashMap<>());
-                return packetIdMap.get(packetId);
+                final int index = SERVERBOUND_PLAY_VERSION_MAPPER.getIndex(version);
+                final PacketTypeCommon[][] arrays = PACKET_TYPE_ID_ARRAY;
+                if (index < 0 || index >= arrays.length) {
+                    return null;
+                }
+                final PacketTypeCommon[] byId = arrays[index];
+                return byId != null && packetId >= 0 && packetId < byId.length ? byId[packetId] : null;
             }
 
             private static void loadPacketIds(Enum<?>[] enumConstants) {
-                int index = INDEX;
+                final int index = INDEX;
+                PacketTypeCommon[] byId = new PacketTypeCommon[0];
                 for (Enum<?> constant : enumConstants) {
                     int id = constant.ordinal();
                     Client value = Client.valueOf(constant.name());
                     value.ids[index] = id;
-                    Map<Integer, PacketTypeCommon> packetIdMap = PACKET_TYPE_ID_MAP.computeIfAbsent((byte) index,
-                            k -> new HashMap<>());
-                    packetIdMap.put(id, value);
+                    if (id >= byId.length) {
+                        byId = Arrays.copyOf(byId, Math.max(id + 1, byId.length + 32));
+                    }
+                    byId[id] = value;
                 }
+                if (index >= PACKET_TYPE_ID_ARRAY.length) {
+                    PACKET_TYPE_ID_ARRAY = Arrays.copyOf(PACKET_TYPE_ID_ARRAY, index + 1);
+                }
+                PACKET_TYPE_ID_ARRAY[index] = byId;
                 INDEX++;
             }
 
@@ -1616,7 +1627,8 @@ public final class PacketType {
             ;
 
             private static int INDEX = 0;
-            private static final Map<Byte, Map<Integer, PacketTypeCommon>> PACKET_TYPE_ID_MAP = new HashMap<>();
+            // 热路径：id → PacketType 走数组下标（装载期建表），省掉每包一次 HashMap/装箱
+            private static volatile PacketTypeCommon[][] PACKET_TYPE_ID_ARRAY = new PacketTypeCommon[0][];
             private final int[] ids;
             private final Class<? extends PacketWrapper<?>> wrapper;
 
@@ -1642,9 +1654,13 @@ public final class PacketType {
             public static PacketTypeCommon getById(ClientVersion version, int packetId) {
                 PacketType.prepare();
 
-                int index = CLIENTBOUND_PLAY_VERSION_MAPPER.getIndex(version);
-                Map<Integer, PacketTypeCommon> map = PACKET_TYPE_ID_MAP.get((byte) index);
-                return map.get(packetId);
+                final int index = CLIENTBOUND_PLAY_VERSION_MAPPER.getIndex(version);
+                final PacketTypeCommon[][] arrays = PACKET_TYPE_ID_ARRAY;
+                if (index < 0 || index >= arrays.length) {
+                    return null;
+                }
+                final PacketTypeCommon[] byId = arrays[index];
+                return byId != null && packetId >= 0 && packetId < byId.length ? byId[packetId] : null;
             }
 
             @Override
@@ -1653,14 +1669,21 @@ public final class PacketType {
             }
 
             private static void loadPacketIds(Enum<?>[] enumConstants) {
-                int index = INDEX;
+                final int index = INDEX;
+                PacketTypeCommon[] byId = new PacketTypeCommon[0];
                 for (Enum<?> constant : enumConstants) {
                     int id = constant.ordinal();
                     Server value = Server.valueOf(constant.name());
                     value.ids[index] = id;
-                    Map<Integer, PacketTypeCommon> packetIdMap = PACKET_TYPE_ID_MAP.computeIfAbsent((byte) index, k -> new HashMap<>());
-                    packetIdMap.put(id, value);
+                    if (id >= byId.length) {
+                        byId = Arrays.copyOf(byId, Math.max(id + 1, byId.length + 32));
+                    }
+                    byId[id] = value;
                 }
+                if (index >= PACKET_TYPE_ID_ARRAY.length) {
+                    PACKET_TYPE_ID_ARRAY = Arrays.copyOf(PACKET_TYPE_ID_ARRAY, index + 1);
+                }
+                PACKET_TYPE_ID_ARRAY[index] = byId;
                 INDEX++;
             }
 

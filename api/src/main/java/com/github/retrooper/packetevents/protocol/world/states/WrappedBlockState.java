@@ -111,6 +111,7 @@ public class WrappedBlockState {
             new EnumMap<>(StateValue.class), 0, AIR_MAPPING_INDEX);
     private static final Map<String, WrappedBlockState>[] BY_STRING = new Map[HIGHEST_MAPPING_INDEX + 1];
     private static final Map<Integer, WrappedBlockState>[] BY_ID = new Map[HIGHEST_MAPPING_INDEX + 1];
+    private static final WrappedBlockState[][] BY_ID_ARRAY = new WrappedBlockState[HIGHEST_MAPPING_INDEX + 1][];
     private static final Map<WrappedBlockState, String>[] INTO_STRING = new Map[HIGHEST_MAPPING_INDEX + 1];
     private static final Map<WrappedBlockState, Integer>[] INTO_ID = new Map[HIGHEST_MAPPING_INDEX + 1];
     private static final Map<StateType, WrappedBlockState>[] DEFAULT_STATES = new Map[HIGHEST_MAPPING_INDEX + 1];
@@ -130,6 +131,7 @@ public class WrappedBlockState {
         String airName = AIR.getType().getMapped().getName().getKey();
         BY_STRING[AIR_MAPPING_INDEX] = Collections.singletonMap(airName, AIR);
         BY_ID[AIR_MAPPING_INDEX] = Collections.singletonMap(AIR.getGlobalId(), AIR);
+        BY_ID_ARRAY[AIR_MAPPING_INDEX] = indexById(BY_ID[AIR_MAPPING_INDEX]);
         INTO_STRING[AIR_MAPPING_INDEX] = Collections.singletonMap(AIR, airName);
         INTO_ID[AIR_MAPPING_INDEX] = Collections.singletonMap(AIR, AIR.getGlobalId());
         DEFAULT_STATES[AIR_MAPPING_INDEX] = Collections.singletonMap(AIR.getType(), AIR);
@@ -167,6 +169,24 @@ public class WrappedBlockState {
         this.type = type;
         this.data = data;
         this.mappingsIndex = mappingsIndex;
+    }
+
+    private static WrappedBlockState[] indexById(Map<Integer, WrappedBlockState> map) {
+        if (map.isEmpty()) {
+            return null;
+        }
+        int max = -1;
+        for (int id : map.keySet()) {
+            if (id > max) max = id;
+        }
+        WrappedBlockState[] byId = new WrappedBlockState[max + 1];
+        for (Map.Entry<Integer, WrappedBlockState> entry : map.entrySet()) {
+            int id = entry.getKey();
+            if (id >= 0 && id < byId.length) {
+                byId[id] = entry.getValue();
+            }
+        }
+        return byId;
     }
 
     private static byte loadMappings(ClientVersion version) {
@@ -304,7 +324,9 @@ public class WrappedBlockState {
     public static WrappedBlockState getByGlobalId(ClientVersion version, int globalID, boolean clone) {
         if (globalID == 0) return AIR; // Hardcode for performance
         byte mappingsIndex = loadMappings(version);
-        final WrappedBlockState state = BY_ID[mappingsIndex].getOrDefault(globalID, AIR);
+        final WrappedBlockState[] byId = BY_ID_ARRAY[mappingsIndex];
+        final WrappedBlockState state = byId != null && globalID >= 0 && globalID < byId.length && byId[globalID] != null
+                ? byId[globalID] : AIR;
         return clone ? state.clone() : state;
     }
 
@@ -430,6 +452,7 @@ public class WrappedBlockState {
             }
 
             BY_ID[LEGACY_MAPPING_INDEX] = stateByIdMap;
+            BY_ID_ARRAY[LEGACY_MAPPING_INDEX] = indexById(stateByIdMap);
             INTO_ID[LEGACY_MAPPING_INDEX] = stateToIdMap;
             BY_STRING[LEGACY_MAPPING_INDEX] = stateByStringMap;
             INTO_STRING[LEGACY_MAPPING_INDEX] = stateToStringMap;
@@ -532,6 +555,7 @@ public class WrappedBlockState {
             }
 
             BY_ID[mappingIndex] = stateByIdMap;
+            BY_ID_ARRAY[mappingIndex] = indexById(stateByIdMap);
             INTO_ID[mappingIndex] = stateToIdMap;
             BY_STRING[mappingIndex] = stateByStringMap;
             INTO_STRING[mappingIndex] = stateToStringMap;
@@ -1603,7 +1627,9 @@ public class WrappedBlockState {
         int oldGlobalID = globalID;
         globalID = getGlobalIdNoCache();
         if (globalID == -1) { // -1 maps to no block as negative ID are impossible
-            WrappedBlockState blockState = BY_ID[this.mappingsIndex].getOrDefault(oldGlobalID, AIR).clone();
+            final WrappedBlockState[] byId = BY_ID_ARRAY[this.mappingsIndex];
+            final WrappedBlockState mapped = byId != null && oldGlobalID >= 0 && oldGlobalID < byId.length ? byId[oldGlobalID] : null;
+            WrappedBlockState blockState = (mapped != null ? mapped : AIR).clone();
             this.type = blockState.type;
             this.globalID = blockState.globalID;
             this.data = new HashMap<>(blockState.data);

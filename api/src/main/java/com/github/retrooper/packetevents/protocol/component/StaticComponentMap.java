@@ -52,6 +52,10 @@ public final class StaticComponentMap implements IComponentMap {
 
     private final boolean empty;
     final Map<ComponentType<?>, ?> delegate;
+    private final ComponentType<?>[] keys;
+    private final Object[] values;
+    private final boolean[] refs;
+    private final int mask;
     final IRegistryHolder registries;
 
     @Deprecated
@@ -63,6 +67,26 @@ public final class StaticComponentMap implements IComponentMap {
         this.empty = delegate.isEmpty();
         this.delegate = this.empty ? Collections.emptyMap()
                 : Collections.unmodifiableMap(new HashMap<>(delegate));
+        final int need = Math.max(2, this.delegate.size()) * 2;
+        int capacity = Integer.highestOneBit(need);
+        if (capacity < need) {
+            capacity <<= 1;
+        }
+        this.keys = new ComponentType<?>[capacity];
+        this.values = new Object[capacity];
+        this.refs = new boolean[capacity];
+        this.mask = capacity - 1;
+        for (Map.Entry<ComponentType<?>, ?> entry : this.delegate.entrySet()) {
+            final ComponentType<?> key = entry.getKey();
+            final int hash = key.hashCode();
+            int slot = (hash ^ (hash >>> 16)) & this.mask;
+            while (this.keys[slot] != null) {
+                slot = (slot + 1) & this.mask;
+            }
+            this.keys[slot] = key;
+            this.values[slot] = entry.getValue();
+            this.refs[slot] = entry.getValue() instanceof ComponentValueRef;
+        }
         this.registries = registries;
     }
 
@@ -72,17 +96,41 @@ public final class StaticComponentMap implements IComponentMap {
 
     @Override
     public boolean has(ComponentType<?> type) {
-        return !this.empty && this.delegate.containsKey(type);
+        return this.slotOf(type) >= 0;
     }
 
     @SuppressWarnings("unchecked")
     @Override
     public <T> @Nullable T get(ComponentType<T> type) {
-        Object v = this.delegate.get(type);
-        if (v instanceof ComponentValueRef) {
+        final int slot = this.slotOf(type);
+        if (slot < 0) {
+            return null;
+        }
+        Object v = this.values[slot];
+        if (this.refs[slot]) {
             v = ((ComponentValueRef<?>) v).resolve(this.registries);
         }
         return (T) v;
+    }
+
+    private int slotOf(ComponentType<?> type) {
+        if (type == null) {
+            return -1;
+        }
+        final ComponentType<?>[] keys = this.keys;
+        final int mask = this.mask;
+        final int hash = type.hashCode();
+        int slot = (hash ^ (hash >>> 16)) & mask;
+        while (true) {
+            final ComponentType<?> key = keys[slot];
+            if (key == null) {
+                return -1;
+            }
+            if (key == type || type.equals(key)) {
+                return slot;
+            }
+            slot = (slot + 1) & mask;
+        }
     }
 
     @Override
