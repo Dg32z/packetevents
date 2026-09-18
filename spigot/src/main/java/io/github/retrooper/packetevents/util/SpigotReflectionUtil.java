@@ -158,6 +158,7 @@ public final class SpigotReflectionUtil {
     //Entries are validated by count and the component patch reference, hits return a copy.
     private static Field CRAFT_ITEM_STACK_HANDLE_FIELD;
     private static Method ITEM_STACK_GET_PATCH_METHOD;
+    private static MethodHandle ITEM_STACK_GET_PATCH_MH;
     private static boolean ITEM_STACK_DECODE_CACHE_ENABLED;
 
     private static Object MINECRAFT_SERVER_INSTANCE;
@@ -549,13 +550,16 @@ public final class SpigotReflectionUtil {
                 // find getComponentsPatch() by its return type, works with both mappings and obfuscated names
                 Class<?> patchClass = Reflection.getClassByNameWithoutException("net.minecraft.core.component.DataComponentPatch");
                 if (patchClass != null) {
-                    ITEM_STACK_GET_PATCH_METHOD = Reflection.getMethod(NMS_ITEM_STACK_CLASS, patchClass, 0);
+                    // arity matters: the class also declares synthetic DataComponentPatch lambdas that
+                    // take an ItemStack argument, and invoking one of those throws on every conversion
+                    ITEM_STACK_GET_PATCH_METHOD = Reflection.getMethod(NMS_ITEM_STACK_CLASS, patchClass, 0, new Class<?>[0]);
                 }
             } else {
                 ITEM_STACK_GET_PATCH_METHOD = Reflection.getMethod(NMS_ITEM_STACK_CLASS, "getTag", 0);
             }
             if (ITEM_STACK_GET_PATCH_METHOD != null) {
                 ITEM_STACK_GET_PATCH_METHOD.setAccessible(true);
+                ITEM_STACK_GET_PATCH_MH = unreflect(ITEM_STACK_GET_PATCH_METHOD);
             }
         }
         ITEM_STACK_DECODE_CACHE_ENABLED = CRAFT_ITEM_STACK_HANDLE_FIELD != null && ITEM_STACK_GET_PATCH_METHOD != null;
@@ -978,7 +982,9 @@ public final class SpigotReflectionUtil {
             try {
                 Object handle = CRAFT_ITEM_STACK_HANDLE_FIELD.get(in);
                 if (handle != null) {
-                    Object patch = ITEM_STACK_GET_PATCH_METHOD.invoke(handle);
+                    Object patch = ITEM_STACK_GET_PATCH_MH != null
+                            ? ITEM_STACK_GET_PATCH_MH.invoke(handle)
+                            : ITEM_STACK_GET_PATCH_METHOD.invoke(handle);
                     return ITEM_STACK_DECODE_CACHE.getOrConvert(handle, in.getAmount(), patch,
                             () -> decodeBukkitItemStackSlow(in));
                 }
