@@ -77,7 +77,10 @@ public abstract class ProtocolPacketEvent extends PacketEvent implements PlayerE
         if (serverProtocolView) {
             this.serverVersion = PacketEvents.getAPI().getServerManager().getVersion();
         } else {
-            this.serverVersion = user.getClientVersion().toServerVersion();
+            // pre-Via view: the buffer is still encoded in the server's native protocol, so decode it with the
+            // server version. User#getPacketVersion() does exactly that on a backend and keeps the client
+            // version on proxies. Only the version source changes here, the pre/post-Via state stay untouched.
+            this.serverVersion = user.getPacketVersion().toServerVersion();
         }
 
         this.byteBuf = byteBuf;
